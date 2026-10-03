@@ -58,7 +58,8 @@ jobs:
           Invoke-WebRequest $asset.browser_download_url -OutFile ae.zip
           $sum = $rel.assets | Where-Object { $_.name -eq 'aether-windows-x86_64.zip.sha256' } | Select-Object -First 1
           if ($sum) {
-            $want = ((Invoke-WebRequest $sum.browser_download_url).Content.ToString().Trim() -split '\s+')[0].ToLower()
+            Invoke-WebRequest $sum.browser_download_url -OutFile ae.zip.sha256
+            $want = ((Get-Content ae.zip.sha256 -Raw).Trim() -split '\s+')[0].ToLower()
             $got = (Get-FileHash ae.zip -Algorithm SHA256).Hash.ToLower()
             if ($want -ne $got) { throw "Aether checksum mismatch: $got != $want" }
             Write-Host 'checksum OK'
