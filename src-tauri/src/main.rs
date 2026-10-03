@@ -206,8 +206,11 @@ async fn start_aether(app: AppHandle, protocol: String, scan: String, h2: bool, 
             thread::sleep(Duration::from_millis(600));
         }
         let exe = aether_path(&app)?;
-        // هویت WARP (aether.toml) و آخرین گیت‌وی سالم اینجا می‌مونن تا هر بار ثبت‌نام تازه نشه
-        let dir = data_dir(&app)?.join("aether");
+        // هویت WARP و آخرین گیت‌وی سالم اینجا می‌مونن تا هر بار ثبت‌نام تازه نشه.
+        // مثل Aether-GUI فقط cwd رو ثابت نگه می‌داریم و خود Aether اسم فایل هویت رو انتخاب می‌کنه
+        // (WireGuard: aether.toml، MASQUE: aether-masque.toml). پوشه‌ی جدید = هویت تمیز،
+        // چون نسخه‌ی قبلی هر دو پروتکل رو توی یه فایل می‌ریخت و خرابش می‌کرد.
+        let dir = data_dir(&app)?.join("aether-data");
         fs::create_dir_all(&dir).map_err(err)?;
         let log_path = dir.join("aether.log");
         let log = std::sync::Arc::new(Mutex::new(fs::File::create(&log_path).map_err(err)?));
@@ -218,21 +221,19 @@ async fn start_aether(app: AppHandle, protocol: String, scan: String, h2: bool, 
 
         let bind = format!("127.0.0.1:{AETHER_PORT}");
         let mut cmd = Command::new(&exe);
+        // همون فلگ‌هایی که Aether-GUI می‌فرسته (مثلاً: --wg --balanced -4 --quick-reconnect --noize balanced)
         cmd.current_dir(&dir)
             .arg(format!("--{proto}"))
-            .args(["--bind", bind.as_str(), "-4", "--scan", scan.as_str(), "--noize", noize, "--quick-reconnect"])
-            .env("AETHER_PROTOCOL", &proto)
-            .env("AETHER_SOCKS", &bind)
-            .env("AETHER_SCAN", &scan)
-            .env("AETHER_NOIZE", noize)
-            .env("AETHER_QUICK_RECONNECT", "1")
-            .env("AETHER_CONFIG", dir.join("aether.toml"))
+            .arg(format!("--{scan}"))
+            .args(["-4", "--quick-reconnect", "--noize", noize, "--bind", bind.as_str()])
+            // همیشه ست میشه (0 یا 1) تا Aether سؤال «MASQUE transport» رو نپرسه
+            .env("AETHER_MASQUE_HTTP2", if proto == "masque" && h2 { "1" } else { "0" })
             .env("NO_COLOR", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         if proto == "masque" && h2 {
-            cmd.arg("--h2").env("AETHER_MASQUE_HTTP2", "1");
+            cmd.arg("--h2");
         }
         hide(&mut cmd);
         let mut child = cmd.spawn().map_err(err)?;

@@ -128,7 +128,7 @@ export default function App() {
   const [mode, setMode] = useState<Mode>(() => load('mode', 'tun'));
   // v2.5 · مدل اتصال
   const [engine, setEngine] = useState<Engine>(() => load('engine', 'v2'));
-  const [aeProto, setAeProto] = useState<AetherProto>(() => load('aeProto', 'masque'));
+  const [aeProto, setAeProto] = useState<AetherProto>(() => load('aeProto', 'wg'));
   const [aeScan, setAeScan] = useState<AetherScan>(() => load('aeScan', 'balanced'));
   const [aeH2, setAeH2] = useState<boolean>(() => load('aeH2', false));
   const [aeLog, setAeLog] = useState('');
