@@ -1,0 +1,110 @@
+name: Build MahyarVPN
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri -> target'
+
+      - name: Download sing-box 1.14 (Windows amd64)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $h = @{ Authorization = "Bearer $env:GH_TOKEN"; 'User-Agent' = 'mahyarvpn-ci' }
+          $rels = Invoke-RestMethod -Headers $h 'https://api.github.com/repos/SagerNet/sing-box/releases?per_page=100'
+          $rel = $rels | Where-Object { $_.tag_name -like 'v1.14.*' -and -not $_.prerelease } | Select-Object -First 1
+          if (-not $rel) { $rel = $rels | Where-Object { $_.tag_name -like 'v1.14.*' } | Select-Object -First 1 }
+          if (-not $rel) { throw 'sing-box 1.14 release not found' }
+          $asset = $rel.assets | Where-Object { $_.name -like '*-windows-amd64.zip' } | Select-Object -First 1
+          Write-Host "Using sing-box $($rel.tag_name) -> $($asset.name)"
+          Invoke-WebRequest $asset.browser_download_url -OutFile sb.zip
+          Expand-Archive sb.zip -DestinationPath sb -Force
+          New-Item -ItemType Directory -Force src-tauri/bin | Out-Null
+          Get-ChildItem sb -Recurse -Filter sing-box.exe | Select-Object -First 1 | Copy-Item -Destination src-tauri/bin/sing-box.exe
+          & ./src-tauri/bin/sing-box.exe version
+
+      - name: Download Aether (model 2, Windows x86_64)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # نسخه‌ی Aether؛ برای آخرین نسخه بذارش روی latest
+          AETHER_TAG: ${{ vars.AETHER_TAG || 'v1.5.0' }}
+        run: |
+          $h = @{ Authorization = "Bearer $env:GH_TOKEN"; 'User-Agent' = 'mahyarvpn-ci' }
+          $api = if ($env:AETHER_TAG -eq 'latest') { 'https://api.github.com/repos/CluvexStudio/Aether/releases/latest' } else { "https://api.github.com/repos/CluvexStudio/Aether/releases/tags/$env:AETHER_TAG" }
+          $rel = Invoke-RestMethod -Headers $h $api
+          $asset = $rel.assets | Where-Object { $_.name -eq 'aether-windows-x86_64.zip' } | Select-Object -First 1
+          if (-not $asset) { throw 'aether-windows-x86_64.zip not found in release' }
+          Write-Host "Using Aether $($rel.tag_name)"
+          Invoke-WebRequest $asset.browser_download_url -OutFile ae.zip
+          $sum = $rel.assets | Where-Object { $_.name -eq 'aether-windows-x86_64.zip.sha256' } | Select-Object -First 1
+          if ($sum) {
+            $want = ((Invoke-WebRequest $sum.browser_download_url).Content.ToString().Trim() -split '\s+')[0].ToLower()
+            $got = (Get-FileHash ae.zip -Algorithm SHA256).Hash.ToLower()
+            if ($want -ne $got) { throw "Aether checksum mismatch: $got != $want" }
+            Write-Host 'checksum OK'
+          }
+          Expand-Archive ae.zip -DestinationPath ae -Force
+          $exe = Get-ChildItem ae -Recurse -Filter aether.exe | Select-Object -First 1
+          if (-not $exe) { throw 'aether.exe not found in zip' }
+          New-Item -ItemType Directory -Force src-tauri/bin/aether | Out-Null
+          # خود exe و هر DLL کنارش (bat و راهنما لازم نیست)
+          Get-ChildItem $exe.DirectoryName -File | Where-Object { $_.Extension -in '.exe', '.dll' } | Copy-Item -Destination src-tauri/bin/aether/
+          $files = Get-ChildItem src-tauri/bin/aether -File | Where-Object { $_.Name -ne 'README.txt' }
+          if (-not $files) { throw 'no Aether files were copied into src-tauri/bin/aether' }
+          $files | Format-Table Name, Length
+
+      - name: Install frontend deps
+        run: npm install
+
+      - name: Build app
+        env:
+          VITE_GH_OWNER: ${{ github.repository_owner }}
+          VITE_GH_REPO: ${{ github.event.repository.name }}
+          VITE_SUB_URL: ${{ vars.SUB_URL }}
+        run: npm run tauri build
+
+      - name: Package (Setup + Portable)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out/MahyarVPN-Portable | Out-Null
+          Copy-Item src-tauri/target/release/mahyarvpn.exe out/MahyarVPN-Portable/MahyarVPN.exe
+          Copy-Item src-tauri/bin/sing-box.exe out/MahyarVPN-Portable/sing-box.exe
+          Copy-Item src-tauri/bin/aether out/MahyarVPN-Portable/aether -Recurse
+          Compress-Archive -Path out/MahyarVPN-Portable/* -DestinationPath out/MahyarVPN-Portable.zip -Force
+          $setup = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
+          Copy-Item $setup.FullName out/MahyarVPN-Setup.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MahyarVPN-Windows
+          path: |
+            out/MahyarVPN-Setup.exe
+            out/MahyarVPN-Portable.zip
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/MahyarVPN-Setup.exe
+            out/MahyarVPN-Portable.zip
